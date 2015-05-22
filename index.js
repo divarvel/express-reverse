@@ -1,17 +1,30 @@
 var methods = require('methods');
+var express = require('express');
 
 module.exports = function(app, options) {
   if (!options) options = {};
   if (!options.helperName) options.helperName = 'url';
   augmentVerbs(app);
+  augmentRouterFactory();
+  activateNamedRoutesMerging(app);
   addHelper(app, options);
   addMiddleware(app, options);
 };
 
-function augmentVerbs(app) {
+function augmentRouterFactory() {
+  var _fn = express['Router'];
+  express.Router = function() {
+    var ret = _fn.apply(this, arguments);
+    augmentVerbs(ret);
+    return ret;
+  }
+}
+
+function augmentVerbs (appOrRouter) {
+  if (!appOrRouter._namedRoutes) appOrRouter._namedRoutes = {};
   methods.forEach(function(method) {
-    var _fn = app[method];
-    app[method] = function(name, path) {
+    var _fn = appOrRouter[method];
+    appOrRouter[method] = function(name, path) {
       if ((method == 'get' && arguments.length == 1) ||
         (typeof(path) != 'string' && !(path instanceof String)))
         return _fn.apply(this, arguments);
@@ -20,14 +33,28 @@ function augmentVerbs(app) {
       args.shift();
       var ret = _fn.apply(this, args);
 
-      if (!app._namedRoutes) app._namedRoutes = {};
-      app._namedRoutes[name] = (typeof this.route !== 'string')
+      appOrRouter._namedRoutes[name] = (typeof this.route !== 'string')
           ? this.route(args[0]) // express 4.x
           : this.routes[method].slice(-1)[0]; // express 3.x
 
       return ret;
     };
   });
+}
+
+function activateNamedRoutesMerging (app) {
+  var _fn = app['use'];
+  app['use'] = function() {
+    var middleware = arguments[arguments.length === 1 ? 0 : 1];
+    if(middleware._namedRoutes) {
+      Object.keys(middleware._namedRoutes).forEach(function(key) {
+        app._namedRoutes[key] = middleware._namedRoutes[key];
+      });
+    }
+
+    var ret =  _fn.apply(this, Array.prototype.slice.call(arguments, 0));
+    return ret;
+  };
 }
 
 function addHelper(app, options) {
